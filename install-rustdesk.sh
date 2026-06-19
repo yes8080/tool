@@ -6,7 +6,7 @@ GH_PROXY="https://v4.gh-proxy.org"
 CONFIG_FILE="/etc/rustdesk-install.conf"
 
 echo "========================================"
-echo " RustDesk Server Manager"
+echo " RustDesk Server Manager (Fixed Version)"
 echo "========================================"
 echo "1) 安装 / 升级"
 echo "2) 重新安装（保留密钥）"
@@ -14,20 +14,8 @@ echo "3) 完全重装（删除密钥）"
 echo "4) 修改域名 / IP"
 echo "5) 卸载"
 echo "========================================"
+
 read -rp "请选择 [1-5]: " ACTION
-
-DOMAIN=""
-
-load_domain() {
-    if [ -f "$CONFIG_FILE" ]; then
-        source "$CONFIG_FILE" || true
-        DOMAIN="${DOMAIN:-}"
-    fi
-}
-
-save_domain() {
-    echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
-}
 
 install_deps() {
     for c in curl jq wget dpkg systemctl; do
@@ -38,10 +26,30 @@ install_deps() {
     done
 }
 
+detect_service() {
+    # 自动识别 systemd service 名
+    if systemctl list-unit-files | grep -q "rustdesk-hbbs"; then
+        HBBS_SVC="rustdesk-hbbs"
+        HBBR_SVC="rustdesk-hbbr"
+    else
+        HBBS_SVC="hbbs"
+        HBBR_SVC="hbbr"
+    fi
+}
+
+load_domain() {
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE" || true
+    fi
+    DOMAIN="${DOMAIN:-}"
+}
+
+save_domain() {
+    echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
+}
+
 get_latest() {
     JSON=$(curl -fsSL https://api.github.com/repos/rustdesk/rustdesk-server/releases/latest)
-
-    VERSION=$(echo "$JSON" | jq -r '.tag_name')
 
     HBBS_URL=$(echo "$JSON" | jq -r '
     .assets[]
@@ -54,23 +62,19 @@ get_latest() {
     | select(.name|test("^rustdesk-server-hbbr_.*_amd64\\.deb$"))
     | .browser_download_url
     ' | head -n1)
-
-    if [ -z "$HBBS_URL" ] || [ -z "$HBBR_URL" ]; then
-        echo "获取版本失败"
-        exit 1
-    fi
 }
 
 install_all() {
 
     install_deps
+    detect_service
     load_domain
 
     if [ -z "$DOMAIN" ]; then
         read -rp "请输入域名或IP: " DOMAIN
         save_domain
     else
-        echo "当前域名/IP: $DOMAIN"
+        echo "当前: $DOMAIN"
         read -rp "是否修改? (y/N): " y
         if [[ "$y" =~ ^[Yy]$ ]]; then
             read -rp "输入新域名/IP: " DOMAIN
@@ -90,32 +94,27 @@ install_all() {
 
     dpkg -i hbbs.deb hbbr.deb || apt-get install -fy
 
-    mkdir -p /etc/systemd/system/hbbs.service.d
-
-    cat > /etc/systemd/system/hbbs.service.d/override.conf <<EOF
-[Service]
-ExecStart=
-ExecStart=/usr/bin/hbbs -r ${DOMAIN}:21117
-EOF
-
     systemctl daemon-reload
-    systemctl enable hbbs hbbr >/dev/null 2>&1 || true
-    systemctl restart hbbs hbbr
 
-    echo
+    systemctl enable $HBBS_SVC $HBBR_SVC >/dev/null 2>&1 || true
+
+    systemctl restart $HBBS_SVC $HBBR_SVC
+
     echo "安装完成"
 }
 
 reinstall_keep_key() {
-    systemctl stop hbbs hbbr || true
-    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr || true
+    detect_service
+    systemctl stop $HBBS_SVC $HBBR_SVC 2>/dev/null || true
+    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr 2>/dev/null || true
     install_all
 }
 
 full_reset() {
-    systemctl stop hbbs hbbr || true
-    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr || true
-    rm -rf /var/lib/rustdesk-server || true
+    detect_service
+    systemctl stop $HBBS_SVC $HBBR_SVC 2>/dev/null || true
+    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr 2>/dev/null || true
+    rm -rf /var/lib/rustdesk-server 2>/dev/null || true
     rm -f "$CONFIG_FILE"
     install_all
 }
@@ -123,16 +122,19 @@ full_reset() {
 change_domain() {
     load_domain
     echo "当前: $DOMAIN"
-    read -rp "输入新域名/IP: " DOMAIN
+    read -rp "新域名/IP: " DOMAIN
     save_domain
-    systemctl restart hbbs hbbr || true
+
+    detect_service
+    systemctl restart $HBBS_SVC $HBBR_SVC 2>/dev/null || true
 }
 
 uninstall() {
-    systemctl stop hbbs hbbr || true
-    systemctl disable hbbs hbbr || true
-    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr || true
-    echo "已卸载（密钥保留在 /var/lib/rustdesk-server）"
+    detect_service
+    systemctl stop $HBBS_SVC $HBBR_SVC 2>/dev/null || true
+    systemctl disable $HBBS_SVC $HBBR_SVC 2>/dev/null || true
+    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr 2>/dev/null || true
+    echo "已卸载（密钥保留）"
 }
 
 case "$ACTION" in
