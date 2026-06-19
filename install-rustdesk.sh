@@ -6,255 +6,140 @@ GH_PROXY="https://v4.gh-proxy.org"
 CONFIG_FILE="/etc/rustdesk-install.conf"
 
 echo "========================================"
-echo " RustDesk Server Install / Upgrade"
+echo " RustDesk Server Manager"
 echo "========================================"
-
-for cmd in curl jq wget dpkg systemctl; do
-command -v "$cmd" >/dev/null 2>&1 || {
-echo "缺少依赖: $cmd"
-exit 1
-}
-done
-
-echo
-
-# --------------------------------------------------
-
-# 域名配置
-
-# --------------------------------------------------
+echo "1) 安装 / 升级"
+echo "2) 重新安装（保留密钥）"
+echo "3) 完全重装（删除密钥）"
+echo "4) 修改域名 / IP"
+echo "5) 卸载"
+echo "========================================"
+read -rp "请选择 [1-5]: " ACTION
 
 DOMAIN=""
 
-if [ -f "$CONFIG_FILE" ]; then
-
-```
-source "$CONFIG_FILE" || true
-
-DOMAIN="${DOMAIN:-}"
-
-if [ -n "$DOMAIN" ]; then
-
-    echo "检测到已配置域名:"
-    echo "  $DOMAIN"
-    echo
-
-    read -rp "是否修改域名？(y/N): " CHANGE
-
-    if [[ "$CHANGE" =~ ^[Yy]$ ]]; then
-
-        read -rp "请输入 RustDesk 域名: " DOMAIN
-
-        if [ -z "$DOMAIN" ]; then
-            echo "域名不能为空"
-            exit 1
-        fi
-
-        echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
+load_domain() {
+    if [ -f "$CONFIG_FILE" ]; then
+        source "$CONFIG_FILE" || true
+        DOMAIN="${DOMAIN:-}"
     fi
-
-else
-
-    read -rp "请输入 RustDesk 域名: " DOMAIN
-
-    if [ -z "$DOMAIN" ]; then
-        echo "域名不能为空"
-        exit 1
-    fi
-
-    echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
-
-fi
-```
-
-else
-
-```
-read -rp "请输入 RustDesk 域名: " DOMAIN
-
-if [ -z "$DOMAIN" ]; then
-    echo "域名不能为空"
-    exit 1
-fi
-
-echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
-```
-
-fi
-
-echo
-echo "使用域名:"
-echo "  $DOMAIN"
-echo
-
-# --------------------------------------------------
-
-# 获取最新版本
-
-# --------------------------------------------------
-
-echo "获取最新版本..."
-
-JSON=$(curl -fsSL https://api.github.com/repos/rustdesk/rustdesk-server/releases/latest)
-
-VERSION=$(echo "$JSON" | jq -r '.tag_name')
-
-HBBS_URL=$(echo "$JSON" | jq -r '
-.assets[]
-| select(.name|test("^rustdesk-server-hbbs_.*_amd64\.deb$"))
-| .browser_download_url
-' | head -n1)
-
-HBBR_URL=$(echo "$JSON" | jq -r '
-.assets[]
-| select(.name|test("^rustdesk-server-hbbr_.*_amd64\.deb$"))
-| .browser_download_url
-' | head -n1)
-
-if [ -z "$HBBS_URL" ] || [ "$HBBS_URL" = "null" ]; then
-echo "获取 HBBS 下载地址失败"
-exit 1
-fi
-
-if [ -z "$HBBR_URL" ] || [ "$HBBR_URL" = "null" ]; then
-echo "获取 HBBR 下载地址失败"
-exit 1
-fi
-
-echo "最新版本: $VERSION"
-echo
-
-TMP_DIR=$(mktemp -d)
-
-cleanup() {
-rm -rf "$TMP_DIR"
 }
 
-trap cleanup EXIT
+save_domain() {
+    echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
+}
 
-cd "$TMP_DIR"
+install_deps() {
+    for c in curl jq wget dpkg systemctl; do
+        command -v $c >/dev/null 2>&1 || {
+            echo "缺少依赖: $c"
+            exit 1
+        }
+    done
+}
 
-# --------------------------------------------------
+get_latest() {
+    JSON=$(curl -fsSL https://api.github.com/repos/rustdesk/rustdesk-server/releases/latest)
 
-# 下载
+    VERSION=$(echo "$JSON" | jq -r '.tag_name')
 
-# --------------------------------------------------
+    HBBS_URL=$(echo "$JSON" | jq -r '
+    .assets[]
+    | select(.name|test("^rustdesk-server-hbbs_.*_amd64\\.deb$"))
+    | .browser_download_url
+    ' | head -n1)
 
-echo "下载 HBBS..."
+    HBBR_URL=$(echo "$JSON" | jq -r '
+    .assets[]
+    | select(.name|test("^rustdesk-server-hbbr_.*_amd64\\.deb$"))
+    | .browser_download_url
+    ' | head -n1)
 
-wget -q --show-progress 
-"${GH_PROXY}/${HBBS_URL}" 
--O hbbs.deb
+    if [ -z "$HBBS_URL" ] || [ -z "$HBBR_URL" ]; then
+        echo "获取版本失败"
+        exit 1
+    fi
+}
 
-echo
-echo "下载 HBBR..."
+install_all() {
 
-wget -q --show-progress 
-"${GH_PROXY}/${HBBR_URL}" 
--O hbbr.deb
+    install_deps
+    load_domain
 
-# --------------------------------------------------
+    if [ -z "$DOMAIN" ]; then
+        read -rp "请输入域名或IP: " DOMAIN
+        save_domain
+    else
+        echo "当前域名/IP: $DOMAIN"
+        read -rp "是否修改? (y/N): " y
+        if [[ "$y" =~ ^[Yy]$ ]]; then
+            read -rp "输入新域名/IP: " DOMAIN
+            save_domain
+        fi
+    fi
 
-# 安装
+    echo "使用: $DOMAIN"
 
-# --------------------------------------------------
+    get_latest
 
-echo
-echo "安装/升级..."
+    TMP=$(mktemp -d)
+    cd "$TMP"
 
-dpkg -i hbbs.deb hbbr.deb || apt-get install -fy
+    wget -q --show-progress "${GH_PROXY}/${HBBS_URL}" -O hbbs.deb
+    wget -q --show-progress "${GH_PROXY}/${HBBR_URL}" -O hbbr.deb
 
-# --------------------------------------------------
+    dpkg -i hbbs.deb hbbr.deb || apt-get install -fy
 
-# systemd override
+    mkdir -p /etc/systemd/system/hbbs.service.d
 
-# --------------------------------------------------
-
-mkdir -p /etc/systemd/system/hbbs.service.d
-
-cat > /etc/systemd/system/hbbs.service.d/override.conf <<EOF
+    cat > /etc/systemd/system/hbbs.service.d/override.conf <<EOF
 [Service]
 ExecStart=
 ExecStart=/usr/bin/hbbs -r ${DOMAIN}:21117
 EOF
 
-systemctl daemon-reload
+    systemctl daemon-reload
+    systemctl enable hbbs hbbr >/dev/null 2>&1 || true
+    systemctl restart hbbs hbbr
 
-systemctl enable hbbs >/dev/null 2>&1 || true
-systemctl enable hbbr >/dev/null 2>&1 || true
+    echo
+    echo "安装完成"
+}
 
-systemctl restart hbbs
-systemctl restart hbbr
+reinstall_keep_key() {
+    systemctl stop hbbs hbbr || true
+    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr || true
+    install_all
+}
 
-sleep 3
+full_reset() {
+    systemctl stop hbbs hbbr || true
+    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr || true
+    rm -rf /var/lib/rustdesk-server || true
+    rm -f "$CONFIG_FILE"
+    install_all
+}
 
-# --------------------------------------------------
+change_domain() {
+    load_domain
+    echo "当前: $DOMAIN"
+    read -rp "输入新域名/IP: " DOMAIN
+    save_domain
+    systemctl restart hbbs hbbr || true
+}
 
-# 获取公钥
+uninstall() {
+    systemctl stop hbbs hbbr || true
+    systemctl disable hbbs hbbr || true
+    apt remove -y rustdesk-server-hbbs rustdesk-server-hbbr || true
+    echo "已卸载（密钥保留在 /var/lib/rustdesk-server）"
+}
 
-# --------------------------------------------------
-
-PUBKEY=""
-
-for KEYFILE in 
-/var/lib/rustdesk-server/id_ed25519.pub 
-/opt/rustdesk/id_ed25519.pub 
-/root/id_ed25519.pub
-do
-
-```
-if [ -f "$KEYFILE" ]; then
-    PUBKEY=$(cat "$KEYFILE")
-    break
-fi
-```
-
-done
-
-# --------------------------------------------------
-
-# 输出结果
-
-# --------------------------------------------------
-
-echo
-echo "========================================"
-echo " 安装完成"
-echo "========================================"
-echo
-
-echo "客户端配置:"
-echo
-
-echo "ID Server:"
-echo "  $DOMAIN"
-
-echo
-echo "Relay Server:"
-echo "  $DOMAIN"
-
-if [ -n "$PUBKEY" ]; then
-echo
-echo "Key:"
-echo "  $PUBKEY"
-fi
-
-echo
-echo "服务状态:"
-echo "  HBBS: $(systemctl is-active hbbs)"
-echo "  HBBR: $(systemctl is-active hbbr)"
-
-echo
-echo "开放以下端口:"
-echo "  21115/tcp"
-echo "  21116/tcp"
-echo "  21116/udp"
-echo "  21117/tcp"
-
-echo
-echo "查看日志:"
-echo "  journalctl -u hbbs -f"
-echo "  journalctl -u hbbr -f"
-
-echo
-echo "完成"
+case "$ACTION" in
+    1) install_all ;;
+    2) reinstall_keep_key ;;
+    3) full_reset ;;
+    4) change_domain ;;
+    5) uninstall ;;
+    *) echo "无效选项" ;;
+esac
