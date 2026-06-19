@@ -10,8 +10,8 @@ echo " RustDesk Server Install / Upgrade"
 echo "========================================"
 
 for cmd in curl jq wget dpkg systemctl; do
-command -v "$cmd" >/dev/null || {
-echo "$cmd 未安装"
+command -v "$cmd" >/dev/null 2>&1 || {
+echo "缺少依赖: $cmd"
 exit 1
 }
 done
@@ -24,24 +24,43 @@ echo
 
 # --------------------------------------------------
 
+DOMAIN=""
+
 if [ -f "$CONFIG_FILE" ]; then
 
 ```
-source "$CONFIG_FILE"
+source "$CONFIG_FILE" || true
 
-echo "检测到已配置域名/IP:"
-echo "  $DOMAIN"
-echo
+DOMAIN="${DOMAIN:-}"
 
-read -rp "是否修改？(y/N): " CHANGE_DOMAIN
+if [ -n "$DOMAIN" ]; then
 
-if [[ "$CHANGE_DOMAIN" =~ ^[Yy]$ ]]; then
+    echo "检测到已配置域名:"
+    echo "  $DOMAIN"
+    echo
 
-    PUBLIC_IP=$(curl -4 -fsSL https://api.ipify.org || true)
+    read -rp "是否修改域名？(y/N): " CHANGE
 
-    read -rp "请输入域名或公网IP [默认:${PUBLIC_IP}]: " DOMAIN
+    if [[ "$CHANGE" =~ ^[Yy]$ ]]; then
 
-    DOMAIN=${DOMAIN:-$PUBLIC_IP}
+        read -rp "请输入 RustDesk 域名: " DOMAIN
+
+        if [ -z "$DOMAIN" ]; then
+            echo "域名不能为空"
+            exit 1
+        fi
+
+        echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
+    fi
+
+else
+
+    read -rp "请输入 RustDesk 域名: " DOMAIN
+
+    if [ -z "$DOMAIN" ]; then
+        echo "域名不能为空"
+        exit 1
+    fi
 
     echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
 
@@ -51,14 +70,10 @@ fi
 else
 
 ```
-PUBLIC_IP=$(curl -4 -fsSL https://api.ipify.org || true)
-
-read -rp "请输入 RustDesk 服务域名或公网IP [默认:${PUBLIC_IP}]: " DOMAIN
-
-DOMAIN=${DOMAIN:-$PUBLIC_IP}
+read -rp "请输入 RustDesk 域名: " DOMAIN
 
 if [ -z "$DOMAIN" ]; then
-    echo "域名/IP不能为空"
+    echo "域名不能为空"
     exit 1
 fi
 
@@ -68,7 +83,7 @@ echo "DOMAIN=${DOMAIN}" > "$CONFIG_FILE"
 fi
 
 echo
-echo "使用服务器地址:"
+echo "使用域名:"
 echo "  $DOMAIN"
 echo
 
@@ -78,7 +93,7 @@ echo
 
 # --------------------------------------------------
 
-echo "获取最新版本信息..."
+echo "获取最新版本..."
 
 JSON=$(curl -fsSL https://api.github.com/repos/rustdesk/rustdesk-server/releases/latest)
 
@@ -97,16 +112,15 @@ HBBR_URL=$(echo "$JSON" | jq -r '
 ' | head -n1)
 
 if [ -z "$HBBS_URL" ] || [ "$HBBS_URL" = "null" ]; then
-echo "获取 HBBS 下载链接失败"
+echo "获取 HBBS 下载地址失败"
 exit 1
 fi
 
 if [ -z "$HBBR_URL" ] || [ "$HBBR_URL" = "null" ]; then
-echo "获取 HBBR 下载链接失败"
+echo "获取 HBBR 下载地址失败"
 exit 1
 fi
 
-echo
 echo "最新版本: $VERSION"
 echo
 
@@ -141,18 +155,18 @@ wget -q --show-progress
 
 # --------------------------------------------------
 
-# 安装升级
+# 安装
 
 # --------------------------------------------------
 
 echo
-echo "安装/升级中..."
+echo "安装/升级..."
 
 dpkg -i hbbs.deb hbbr.deb || apt-get install -fy
 
 # --------------------------------------------------
 
-# 创建 systemd override
+# systemd override
 
 # --------------------------------------------------
 
@@ -166,8 +180,8 @@ EOF
 
 systemctl daemon-reload
 
-systemctl enable hbbs
-systemctl enable hbbr
+systemctl enable hbbs >/dev/null 2>&1 || true
+systemctl enable hbbr >/dev/null 2>&1 || true
 
 systemctl restart hbbs
 systemctl restart hbbr
@@ -209,42 +223,38 @@ echo " 安装完成"
 echo "========================================"
 echo
 
-echo "客户端配置："
+echo "客户端配置:"
 echo
+
 echo "ID Server:"
 echo "  $DOMAIN"
+
 echo
 echo "Relay Server:"
 echo "  $DOMAIN"
-echo
 
 if [ -n "$PUBKEY" ]; then
-
-```
+echo
 echo "Key:"
 echo "  $PUBKEY"
-echo
-```
-
 fi
 
-echo "服务状态："
 echo
-
-systemctl --no-pager is-active hbbs
-systemctl --no-pager is-active hbbr
-
-echo
-echo "查看日志："
-echo "  journalctl -u hbbs -f"
-echo "  journalctl -u hbbr -f"
+echo "服务状态:"
+echo "  HBBS: $(systemctl is-active hbbs)"
+echo "  HBBR: $(systemctl is-active hbbr)"
 
 echo
-echo "开放端口："
+echo "开放以下端口:"
 echo "  21115/tcp"
 echo "  21116/tcp"
 echo "  21116/udp"
 echo "  21117/tcp"
 
 echo
-echo "完成。"
+echo "查看日志:"
+echo "  journalctl -u hbbs -f"
+echo "  journalctl -u hbbr -f"
+
+echo
+echo "完成"
